@@ -1,66 +1,73 @@
 import streamlit as st
 from supabase import create_client, Client
 
-# Supabase接続設定
+# --- 1. 接続設定 ---
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
 
-st.title("傘シェア・シミュレーター")
+# --- 2. 画面左側のメニュー（サイドバー）を作る ---
+st.sidebar.title("操作メニュー")
+app_mode = st.sidebar.radio("表示モードを切り替え", ["利用者用", "管理者用", "開発・テスト用"])
 
-# --- データの取得 ---
-stand_res = supabase.table("stands").select("*").eq("location_name", "熊本駅前1号機").execute()
-if stand_res.data:
-    stand = stand_res.data[0]
-    
-    # 状態表示
-    st.subheader(f"場所: {stand['location_name']}")
-    col_a, col_b = st.columns(2)
-    col_a.metric("在庫数", f"{stand['current_stock']} 本")
-    
-    # ロックの状態を可視化
-    lock_status = "🔓 解錠中" if stand['is_unlocked'] else "🔒 施錠中"
-    col_b.metric("ロック状態", lock_status)
+# --- 3. データの取得 ---
+res = supabase.table("stands").select("*").eq("location_name", "熊本駅前1号機").execute()
+stand = res.data[0] if res.data else None
 
-    st.divider()
+# --- 4. 【重要】選んだモードによって表示を変える ---
 
-    # --- ユーザー操作（スマホ画面のイメージ） ---
-    if not stand['is_unlocked']:
-        # ロックがかかっている時だけ、操作ボタンを出す
-        c1, c2 = st.columns(2)
-        if c1.button("傘を借りる"):
-            if stand['current_stock'] > 0:
+if app_mode == "利用者用":
+    # ユーザーに見せる「本物のアプリ」の画面
+    st.title("☂️ くまもん傘シェア")
+    if stand:
+        st.subheader(f"設置場所: {stand['location_name']}")
+        st.write("傘が必要な時、または返す時にボタンを押してください。")
+        
+        # ロックがかかっている時だけボタンを出す
+        if not stand['is_unlocked']:
+            c1, c2 = st.columns(2)
+            if c1.button("傘を借りる"):
                 supabase.table("stands").update({"is_unlocked": True}).eq("id", stand['id']).execute()
-                st.info("ロックを開けました。傘を取り出してください。")
                 st.rerun()
-            else:
-                st.error("在庫がありません。")
-        
-        if c2.button("傘を返す"):
-            supabase.table("stands").update({"is_unlocked": True}).eq("id", stand['id']).execute()
-            st.info("ロックを開けました。傘を差し込んでください。")
-            st.rerun()
+            if c2.button("傘を返す"):
+                supabase.table("stands").update({"is_unlocked": True}).eq("id", stand['id']).execute()
+                st.rerun()
+        else:
+            st.warning("現在、傘立てのロックが開いています。操作を待機中です...")
 
-    else:
-        # --- ハードウェアのシミュレーション（本来はM5Stackがやる動作） ---
-        st.warning("⚠️ 現在ロックが開いています。物理的な動きを待機中...")
+elif app_mode == "管理者用":
+    # あなたがPCで管理するための画面
+    st.title("📊 管理者ダッシュボード")
+    if stand:
+        st.write("### 現在の稼働状況")
+        col1, col2 = st.columns(2)
+        col1.metric("在庫数", f"{stand['current_stock']} 本")
+        col2.metric("ロック状態", "🔓 開" if stand['is_unlocked'] else "🔒 閉")
         
-        # リミットスイッチを模した隠しボタン
-        if st.button("（物理）傘がゲートを通過した！"):
-            # 在庫の増減判定（本来はアプリ側で「貸出中」フラグ等を見て判断）
-            # 今回は簡易的に「直前の動作」を判定するか、手動で選ぶ形にします
-            st.write("傘の通過を検知。在庫を更新し、ロックを閉めます。")
-            
-            # ここでは「借りる」か「返す」かを選択させるシミュレーション
+        st.divider()
+        st.write("※将来的にここに全拠点のリストや売上グラフを表示します。")
+
+else:
+    # M5Stackの動きをシミュレーションする開発用画面
+    st.title("🛠 開発・テスト（ハードウェア再現）")
+    st.write("この画面は「M5Stack（傘立て本体）」がやるべき動作をテストする場所です。")
+    
+    if stand and stand['is_unlocked']:
+        st.info("スマホから解錠命令が届いています。")
+        if st.button("（物理）傘が通過した！"):
+            # 借りるか返すかを選択してシミュレート
             action = st.radio("今の動作は？", ["借りた", "返した"])
-            
             diff = -1 if action == "借りた" else 1
-            new_stock = stand['current_stock'] + diff
             
-            # DB更新
+            # DBを更新して、ロックをFalseに戻す
             supabase.table("stands").update({
-                "current_stock": new_stock,
+                "current_stock": stand['current_stock'] + diff,
                 "is_unlocked": False
+            }).eq("id", stand['id']).execute()
+            st.success("物理動作を検知し、在庫を更新しました。")
+            st.rerun()
+    else:
+        st.write("待機中：スマホからの解錠命令を待っています。")
             }).eq("id", stand['id']).execute()
             
             st.success(f"{action}処理が完了しました！")
